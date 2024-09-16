@@ -37,7 +37,7 @@ const useStore = create(
   persist(
     (set, get) => ({
       balance: 100,
-      transactions: [1, 2, 3],
+      transactions: [],
       transactionsLoading: false,
       pfiAllowlist: Object.keys(mockProviderDids).map((key) => ({
         pfiUri: mockProviderDids[key].uri,
@@ -51,6 +51,7 @@ const useStore = create(
       offerings: [],
       customerDid: null,
       customerCredentials: [],
+      filteredOfferings: [],
 
       initializeDid: async () => {
         try {
@@ -206,8 +207,42 @@ const useStore = create(
         fetchAllExchanges();
         setInterval(fetchAllExchanges, 5000);
       },
+      
+      filterOfferings: (payinCurrency, payoutCurrency) => {
+        const offerings = get().offerings;
+        const filtered = offerings.filter(offering =>
+          offering.data.payin.currencyCode === payinCurrency &&
+          offering.data.payout.currencyCode === payoutCurrency
+        );
 
-      // ... (include other methods like formatMessages, updateExchanges, etc.)
+        set({ filteredOfferings: filtered });
+      },
+
+      setOffering: (offering) => {
+        set({ offering });
+      },
+
+      satisfiesOfferingRequirements: async (offering, credentials) => {
+        if(credentials.length === 0 || !offering.data.requiredClaims) {
+          return false;
+        }
+
+        try {
+          // Validate customer's VCs against the offering's presentation definition
+          PresentationExchange.satisfiesPresentationDefinition({
+            vcJwts: credentials,
+            presentationDefinition: offering.data.requiredClaims,
+          });
+
+          return true;
+
+
+        } catch (error) {
+          console.log(error);
+          return false;
+        }
+
+      },
 
       addCredential: (credential) => {
         set((state) => ({

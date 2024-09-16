@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -14,11 +14,21 @@ import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { signIn, signUp } from "@/lib/actions/user.actions";
 import PlaidLink from "./PlaidLink";
+import useStore from "@/lib/tbdex";
+import LinkPfiOfferings from "./LinkPfiOfferings";
 
 const AuthForm = ({ type }: { type: string }) => {
   const router = useRouter();
   const [user, setUser] = useState(null);
+  console.log("usr auth", user);
+
   const [isLoading, setIsLoading] = useState(false);
+
+  const { initializeDid, customerDid } = useStore();
+
+  useEffect(() => {
+    if (type === "sign-up") initializeDid();
+  }, []);
 
   const formSchema = authFormSchema(type);
 
@@ -43,13 +53,14 @@ const AuthForm = ({ type }: { type: string }) => {
           lastName: data.lastName!,
           address1: data.address1!,
           city: data.city!,
-          state: data.state!,
           postalCode: data.postalCode!,
           dateOfBirth: data.dateOfBirth!,
-          ssn: data.ssn!,
           email: data.email,
           password: data.password,
+          customerDID: customerDid?.uri,
         };
+
+        console.log("dara client", userData);
 
         const newUser = await signUp(userData);
 
@@ -94,7 +105,7 @@ const AuthForm = ({ type }: { type: string }) => {
       </header>
       {user ? (
         <div className="flex flex-col gap-4">
-          <PlaidLink user={user} variant="primary" />
+          <LinkPfiOfferings />
         </div>
       ) : (
         <>
@@ -135,22 +146,6 @@ const AuthForm = ({ type }: { type: string }) => {
                   <div className="flex gap-4">
                     <CustomInput
                       control={form.control}
-                      name="state"
-                      label="State"
-                      placeholder="ex: NBI"
-                      type="text"
-                    />
-                    <CustomInput
-                      control={form.control}
-                      name="postalCode"
-                      label="Postal Code"
-                      placeholder="ex: 12345"
-                      type="text"
-                    />
-                  </div>
-                  <div className="flex gap-4">
-                    <CustomInput
-                      control={form.control}
                       name="dateOfBirth"
                       label="Date of Birth"
                       placeholder="yyyy-mm-dd"
@@ -158,9 +153,9 @@ const AuthForm = ({ type }: { type: string }) => {
                     />
                     <CustomInput
                       control={form.control}
-                      name="ssn"
-                      label="SSN"
-                      placeholder="ex: 9876"
+                      name="postalCode"
+                      label="Postal Code"
+                      placeholder="ex: 12345"
                       type="text"
                     />
                   </div>
