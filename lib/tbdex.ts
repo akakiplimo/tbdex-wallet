@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import { Close, Order, Rfq, TbdexHttpClient } from "@tbdex/http-client";
 import { DidDht } from "@web5/dids";
 import { Jwt, PresentationExchange } from "@web5/credentials";
+import { getLoggedInUser } from "./actions/user.actions";
 
 // Mock PFI DIDs (same as in the original store)
 const mockProviderDids = {
@@ -36,6 +37,7 @@ const mockProviderDids = {
 const useStore = create(
   persist(
     (set, get) => ({
+      user: null,
       balance: 100,
       transactions: [],
       transactionsLoading: false,
@@ -52,6 +54,20 @@ const useStore = create(
       customerDid: null,
       customerCredentials: [],
       filteredOfferings: [],
+      rfq: null,
+
+      fetchLoggedInUser: async () => {
+        try {
+          const user = await getLoggedInUser(); // Call the getLoggedInUser function
+          set({ user }); // Update the user state with the fetched user data
+        } catch (error) {
+          console.error("Error fetching logged-in user:", error);
+        }
+      },
+
+      setExistingDID: () => {
+        set({ customerDid: get().user.customerDID });
+      },
 
       initializeDid: async () => {
         try {
@@ -91,6 +107,19 @@ const useStore = create(
         }
       },
 
+      updateCurrencies: () => {
+        const payinCurrencies = new Set();
+        const payoutCurrencies = new Set();
+
+        get().offerings.forEach((offering) => {
+          payinCurrencies.add(offering.data.payin.currencyCode);
+          payoutCurrencies.add(offering.data.payout.currencyCode);
+        });
+
+        get().payinCurrencies = Array.from(payinCurrencies);
+        get().payoutCurrencies = Array.from(payoutCurrencies);
+      },
+
       createExchange: async (offering, amount, payoutPaymentDetails) => {
         const selectedCredentials = PresentationExchange.selectCredentials({
           vcJwts: get().customerCredentials,
@@ -104,7 +133,7 @@ const useStore = create(
             protocol: "1.0",
           },
           data: {
-            offeringId: offering.id,
+            offeringId: offering.metadata.id,
             payin: {
               amount: amount.toString(),
               kind: offering.data.payin.methods[0].kind,
@@ -117,6 +146,8 @@ const useStore = create(
             claims: selectedCredentials,
           },
         });
+
+        set({ rfq });
 
         try {
           await rfq.verifyOfferingRequirements(offering);
@@ -135,10 +166,12 @@ const useStore = create(
       },
 
       fetchExchanges: async (pfiUri) => {
+        const exchangeId = get().rfq.exchangeId;
         try {
           const exchanges = await TbdexHttpClient.getExchanges({
             pfiDid: pfiUri,
             did: get().customerDid,
+            exchangeId
           });
 
           return get().formatMessages(exchanges);
@@ -186,6 +219,30 @@ const useStore = create(
         }
       },
 
+      updateExchanges: (newTransactions) => {
+        const existingExchangeIds = get().transactions.map((tx) => tx.id);
+        const updatedExchanges = [...get().transactions];
+
+        newTransactions.forEach((newTx) => {
+          const existingTxIndex = updatedExchanges.findIndex(
+            (tx) => tx.id === newTx.id
+          );
+          if (existingTxIndex > -1) {
+            // Update the existing transaction
+            updatedExchanges[existingTxIndex] = newTx;
+          } else {
+            // Add the new transaction
+            updatedExchanges.push(newTx);
+          }
+        });
+
+        // Sort the transactions if needed
+        // updatedTransactions.sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime));
+
+        // Update the state with the new transactions
+        get().transactions = updatedExchanges;
+      },
+
       pollExchanges: () => {
         const fetchAllExchanges = async () => {
           console.log("Polling exchanges again...");
@@ -193,26 +250,29 @@ const useStore = create(
           const allExchanges = [];
           try {
             for (const pfi of get().pfiAllowlist) {
-              const exchanges = await get().fetchExchanges(pfi.pfiUri);
-              allExchanges.push(...exchanges);
+              const exchanges = await get().fetchExchanges(pfi?.pfiUri);
+              allExchanges?.push(...exchanges);
             }
             console.log("All exchanges:", allExchanges);
             get().updateExchanges(allExchanges.reverse());
             set({ transactionsLoading: false });
           } catch (error) {
             console.error("Failed to fetch exchanges:", error);
+            console.log('exchanges', allExchanges)
           }
         };
 
+        console.log("Fetching all exchanges...", fetchAllExchanges())
         fetchAllExchanges();
         setInterval(fetchAllExchanges, 5000);
       },
-      
+
       filterOfferings: (payinCurrency, payoutCurrency) => {
         const offerings = get().offerings;
-        const filtered = offerings.filter(offering =>
-          offering.data.payin.currencyCode === payinCurrency &&
-          offering.data.payout.currencyCode === payoutCurrency
+        const filtered = offerings.filter(
+          (offering) =>
+            offering.data.payin.currencyCode === payinCurrency &&
+            offering.data.payout.currencyCode === payoutCurrency
         );
 
         set({ filteredOfferings: filtered });
@@ -223,7 +283,7 @@ const useStore = create(
       },
 
       satisfiesOfferingRequirements: async (offering, credentials) => {
-        if(credentials.length === 0 || !offering.data.requiredClaims) {
+        if (credentials.length === 0 || !offering.data.requiredClaims) {
           return false;
         }
 
@@ -235,13 +295,19 @@ const useStore = create(
           });
 
           return true;
-
-
         } catch (error) {
           console.log(error);
           return false;
         }
+      },
 
+      loadCredentials: () => {
+        const storedCredentials = localStorage.getItem("customerCredentials");
+        if (storedCredentials) {
+          get().customerCredentials = JSON.parse(storedCredentials);
+        } else {
+          console.log("No credentials exist");
+        }
       },
 
       addCredential: (credential) => {
@@ -257,20 +323,89 @@ const useStore = create(
       renderCredential: (credentialJwt) => {
         const vc = Jwt.parse({ jwt: credentialJwt }).decoded.payload["vc"];
         return {
-          title: vc.type[vc.type.length - 1].replace(
+          title: vc?.type[vc.type.length - 1].replace(
             /(?<!^)(?<![A-Z])[A-Z](?=[a-z])/g,
             " $&"
           ),
-          name: vc.credentialSubject["name"],
-          countryCode: vc.credentialSubject["countryOfResidence"],
-          issuanceDate: new Date(vc.issuanceDate).toLocaleDateString(
+          name: vc?.credentialSubject["name"],
+          countryCode: vc?.credentialSubject["countryOfResidence"],
+          issuanceDate: new Date(vc?.issuanceDate).toLocaleDateString(
             undefined,
             { dateStyle: "medium" }
           ),
         };
       },
 
-      // ... (include other utility methods)
+      formatMessages: (exchanges) => {
+        const formattedMessages = exchanges.map((exchange) => {
+          const latestMessage = exchange[exchange.length - 1];
+          const rfqMessage = exchange.find((message) => message.kind === "rfq");
+          const quoteMessage = exchange.find(
+            (message) => message.kind === "quote"
+          );
+          // console.log('quote', quoteMessage)
+          const status = get().generateExchangeStatusValues(latestMessage);
+          const fee = quoteMessage?.data["payin"]?.["fee"];
+          const payinAmount = quoteMessage?.data["payin"]?.["amount"];
+          const payoutPaymentDetails =
+            rfqMessage.privateData?.payout.paymentDetails;
+          return {
+            id: latestMessage.metadata.exchangeId,
+            payinAmount:
+              (fee
+                ? Number(payinAmount) + Number(fee)
+                : Number(payinAmount)
+              ).toString() || rfqMessage.data["payinAmount"],
+            payinCurrency: quoteMessage.data["payin"]?.["currencyCode"] ?? null,
+            payoutAmount: quoteMessage?.data["payout"]?.["amount"] ?? null,
+            payoutCurrency: quoteMessage.data["payout"]?.["currencyCode"],
+            status,
+            createdTime: rfqMessage.createdAt,
+            ...(latestMessage.kind === "quote" && {
+              expirationTime: quoteMessage.data["expiresAt"] ?? null,
+            }),
+            from: "You",
+            to:
+              payoutPaymentDetails?.address ||
+              payoutPaymentDetails?.accountNumber +
+                ", " +
+                payoutPaymentDetails?.bankName ||
+              payoutPaymentDetails?.phoneNumber +
+                ", " +
+                payoutPaymentDetails?.networkProvider ||
+              "Unknown",
+            pfiDid: rfqMessage.metadata.to,
+          };
+        });
+
+        return formattedMessages;
+      },
+
+      generateExchangeStatusValues: (exchangeMessage) => {
+        if (exchangeMessage instanceof Close) {
+          if (
+            exchangeMessage.data.reason.toLowerCase().includes("complete") ||
+            exchangeMessage.data.reason.toLowerCase().includes("success")
+          ) {
+            return "completed";
+          } else if (
+            exchangeMessage.data.reason.toLowerCase().includes("expired")
+          ) {
+            return exchangeMessage.data.reason.toLowerCase();
+          } else if (
+            exchangeMessage.data.reason.toLowerCase().includes("cancelled")
+          ) {
+            return "cancelled";
+          } else {
+            return "failed";
+          }
+        }
+        return exchangeMessage.kind;
+      },
+
+      selectTransaction: (transaction) => {
+        get().selectedTransaction = transaction;
+      },
     }),
     {
       name: "wallet-storage",

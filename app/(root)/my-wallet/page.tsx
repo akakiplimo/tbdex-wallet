@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect } from "react";
 import BankCard from "@/components/BankCard";
 import HeaderBox from "@/components/HeaderBox";
 import SendMoneyForm from "@/components/SendMoneyForm";
@@ -10,7 +10,11 @@ import useStore from "@/lib/tbdex";
 import OfferingsList from "@/components/OfferingsList";
 
 const MyWallet = () => {
-  const { filteredOfferings, pfiAllowlist } = useStore();
+  const { fetchOfferings, offerings, filteredOfferings, pfiAllowlist } = useStore();
+
+  useEffect(() => {
+    fetchOfferings();
+  }, [offerings])
 
   return (
     <section className="flex flex-col lg:flex-row min-h-screen w-full">
